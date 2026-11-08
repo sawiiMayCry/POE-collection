@@ -1,0 +1,49 @@
+name: Collect Allflame prices
+
+on:
+  schedule:
+    - cron: '30 21 * * *'
+      timezone: 'Europe/Zagreb'
+    - cron: '0 22 * * *'
+      timezone: 'Europe/Zagreb'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: collect-allflame
+  cancel-in-progress: false
+
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Download repository
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+
+      - name: Collect prices if today's data is missing
+        shell: pwsh
+        env:
+          POE_CONTACT: ${{ secrets.POE_CONTACT }}
+          POE_LEAGUE: ${{ vars.POE_LEAGUE }}
+        run: |
+          $league = if ([string]::IsNullOrWhiteSpace($env:POE_LEAGUE)) { 'Allflame' } else { $env:POE_LEAGUE }
+          ./scripts/collect-allflame.ps1 -Contact $env:POE_CONTACT -League $league -SkipIfCollectedToday
+
+      - name: Save collected data to repository
+        shell: bash
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -- data/
+          if git diff --cached --quiet; then
+            echo 'No new data to save.'
+            exit 0
+          fi
+          git commit -m "Collect prices $(date -u +%F)"
+          git pull --rebase origin "$(git branch --show-current)"
+          git push
