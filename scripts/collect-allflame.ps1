@@ -14,15 +14,29 @@ if ([string]::IsNullOrWhiteSpace($League)) { throw 'League is required.' }
 New-Item -ItemType Directory -Path $OutputDir -Force | Out-Null
 $now = [DateTime]::UtcNow
 $stamp = $now.ToString("yyyy-MM-dd_HHmmss'Z'")
-$day = $now.ToString('yyyy-MM-dd')
 $leaguePart = $League -replace '[^a-zA-Z0-9_-]', '_'
 
 if ($SkipIfCollectedToday) {
-    # Only a pair with the same collection timestamp counts as complete.
-    foreach ($file in Get-ChildItem -LiteralPath $OutputDir -Filter "${day}_*_${leaguePart}_currency.json" -File) {
+    # One collection per evening window, including retries delayed past midnight.
+    # Compare actual UTC timestamps; preserve those timestamps in the filenames.
+    $zagreb = [TimeZoneInfo]::FindSystemTimeZoneById('Europe/Zagreb')
+    $localNow = [TimeZoneInfo]::ConvertTimeFromUtc($now, $zagreb)
+    $windowStartLocal = $localNow.Date.AddHours(21).AddMinutes(30)
+    if ($localNow -lt $windowStartLocal) { $windowStartLocal = $windowStartLocal.AddDays(-1) }
+    $windowStartUtc = [TimeZoneInfo]::ConvertTimeToUtc($windowStartLocal, $zagreb)
+    $windowEndUtc = [TimeZoneInfo]::ConvertTimeToUtc($windowStartLocal.AddDays(1), $zagreb)
+    foreach ($file in Get-ChildItem -LiteralPath $OutputDir -Filter "*_${leaguePart}_currency.json" -File) {
+        if ($file.Name -notmatch '^(\d{4}-\d{2}-\d{2}_\d{6}Z)_') { continue }
+        $fileUtc = [DateTime]::MinValue
+        $validTime = [DateTime]::TryParseExact(
+            $Matches[1], "yyyy-MM-dd_HHmmss'Z'", [Globalization.CultureInfo]::InvariantCulture,
+            ([Globalization.DateTimeStyles]::AssumeUniversal -bor [Globalization.DateTimeStyles]::AdjustToUniversal),
+            [ref]$fileUtc
+        )
+        if (-not $validTime -or $fileUtc -lt $windowStartUtc -or $fileUtc -ge $windowEndUtc) { continue }
         $pairedName = $file.Name -replace '_currency\.json$', '_unique_accessories.json'
         if (Test-Path -LiteralPath (Join-Path $OutputDir $pairedName) -PathType Leaf) {
-            Write-Output "A complete collection already exists for $day (UTC)."
+            Write-Output "A complete collection already exists for the window starting $($windowStartLocal.ToString('yyyy-MM-dd HH:mm')) Europe/Zagreb."
             return
         }
     }
